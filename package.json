@@ -1,0 +1,29 @@
+{
+  "name": "scraping-api",
+  "version": "1.0.0",
+  "description": "API externa para scraping de produtos com contorno de bloqueios",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "node test-api.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0",
+    "nodemailer": "^7.0.5",
+    "sqlite3": "^5.1.6",
+    "puppeteer": "^21.5.0",
+    "axios": "^1.6.0",
+    "express-rate-limit": "^7.1.5",
+    "node-cache": "^5.1.2",
+    "user-agents": "^1.0.1374",
+    "cheerio": "^1.0.0-rc.12"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "keywords": ["scraping", "api", "mercado-livre", "bot-evasion"],
+  "author": "Jesus",
+  "license": "MIT"
+}
