@@ -1,7 +1,11 @@
-.env
-emails.db
+
+*.db
 *.sqlite
 *.sqlite3
 node_modules/
 npm-debug.log*
 .DS_Store
+
+.env
+package-lock.json
+.package-lock.json
