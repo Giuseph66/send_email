@@ -6,31 +6,35 @@
     <title>Gerenciador de Emails</title>
     <link rel="stylesheet" href="styles.css">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="container">
         <!-- Header -->
         <header class="header">
             <div class="header-content">
-                <h1><i class="fas fa-envelope"></i> Gerenciador de Emails</h1>
+                <div class="header-brand">
+                    <h1><i class="fas fa-envelope"></i> Gerenciador de Emails</h1>
+                <p>Acesse sua conta Google e visualize apenas seu historico de envios</p>
+                </div>
+                <div class="header-actions">
                     <button class="btn btn-info" onclick="showModal('infoModal')">
                         <i class="fas fa-info-circle"></i> API Info
                     </button>
-                <p>Gerencie remetentes e visualize histórico de envios</p>
-                <div class="user-info">
-                    <span id="userDisplay">Bem-vindo!</span>
-                    <button class="btn btn-secondary" onclick="logout()">
-                        <i class="fas fa-sign-out-alt"></i> Sair
-                    </button>
+                    <div class="user-info">
+                        <span id="userDisplay">Bem-vindo!</span>
+                        <button class="btn btn-secondary" onclick="logout()">
+                            <i class="fas fa-sign-out-alt"></i> Sair
+                        </button>
+                    </div>
                 </div>
             </div>
         </header>
 
         <!-- Navigation -->
         <nav class="nav">
-            <button class="nav-btn active" data-tab="remetentes">
-                <i class="fas fa-users"></i> Remetentes
+            <button class="nav-btn active" data-tab="conta-google">
+                <i class="fab fa-google"></i> Conta Google
             </button>
             <button class="nav-btn" data-tab="enviar">
                 <i class="fas fa-paper-plane"></i> Enviar Email
@@ -42,17 +46,14 @@
 
         <!-- Main Content -->
         <main class="main-content">
-            <!-- Remetentes Tab -->
-            <div id="remetentes" class="tab-content active">
+            <!-- Conta Google Tab -->
+            <div id="conta-google" class="tab-content active">
                 <div class="section-header">
-                    <h2>Gerenciar Remetentes</h2>
-                    <button class="btn btn-primary" onclick="showModal('addRemetenteModal')">
-                        <i class="fas fa-plus"></i> Novo Remetente
-                    </button>
+                    <h2>Minha Conta Google</h2>
                 </div>
                 
-                <div class="cards-container" id="remetentesContainer">
-                    <!-- Cards serão inseridos aqui -->
+                <div class="cards-container" id="googleAccountContainer">
+                    <!-- Estado da conta será inserido aqui -->
                 </div>
             </div>
 
@@ -64,13 +65,6 @@
                 
                 <div class="form-container">
                     <form id="emailForm" class="email-form">
-                        <div class="form-group">
-                            <label for="remetente">Remetente:</label>
-                            <select id="remetente" name="remetente" required>
-                                <option value="">Selecione um remetente</option>
-                            </select>
-                        </div>
-                        
                         <div class="form-group">
                             <label for="destinatario">Destinatário:</label>
                             <input type="email" id="destinatario" name="destinatario" required placeholder="destinatario@exemplo.com">
@@ -88,11 +82,36 @@
                         
                         <div class="form-actions">
                             <button type="submit" class="btn btn-primary">
-                                <i class="fas fa-paper-plane"></i> Enviar Email
+                                <i class="fas fa-paper-plane"></i> Revisar e Enviar
                             </button>
-                            <button type="reset" class="btn btn-secondary">
+                            <button type="reset" class="btn btn-secondary" onclick="cancelarEnvio()">
                                 <i class="fas fa-undo"></i> Limpar
                             </button>
+                        </div>
+
+                        <div id="sendConfirm" class="send-confirm">
+                            <h4><i class="fas fa-paper-plane"></i> Confirmar envio</h4>
+                            <div class="confirm-field">
+                                <span class="confirm-field-label">De:</span>
+                                <span class="confirm-field-value" id="confirmFrom"></span>
+                            </div>
+                            <div class="confirm-field">
+                                <span class="confirm-field-label">Para:</span>
+                                <span class="confirm-field-value" id="confirmTo"></span>
+                            </div>
+                            <div class="confirm-field">
+                                <span class="confirm-field-label">Assunto:</span>
+                                <span class="confirm-field-value" id="confirmSubject"></span>
+                            </div>
+                            <div class="confirm-body-preview" id="confirmBody"></div>
+                            <div class="confirm-actions">
+                                <button type="button" class="btn btn-primary" onclick="confirmarEnvio()">
+                                    <i class="fas fa-check"></i> Confirmar envio
+                                </button>
+                                <button type="button" class="btn btn-secondary" onclick="cancelarEnvio()">
+                                    Cancelar
+                                </button>
+                            </div>
                         </div>
                     </form>
                 </div>
@@ -135,40 +154,6 @@
     </div>
 
     <!-- Modals -->
-    <!-- Add Remetente Modal -->
-    <div id="addRemetenteModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3><i class="fas fa-user-plus"></i> Novo Remetente</h3>
-                <button class="modal-close" onclick="closeModal('addRemetenteModal')">
-                    <i class="fas fa-times"></i>
-                </button>
-            </div>
-            <form id="addRemetenteForm" class="modal-form">
-                <div class="form-group">
-                    <label for="modalEmail">Email:</label>
-                    <input type="email" id="modalEmail" name="email" required placeholder="seu-email@gmail.com">
-                </div>
-                <div class="form-group">
-                    <label for="modalSenha">Senha:</label>
-                    <input type="password" id="modalSenha" name="senha" required placeholder="Sua senha de app">
-                    <small class="form-help">
-                        <i class="fas fa-info-circle"></i> 
-                        Para Gmail, use uma "Senha de App" em vez da senha normal
-                    </small>
-                </div>
-                <div class="modal-actions">
-                    <button type="submit" class="btn btn-primary">
-                        <i class="fas fa-save"></i> Cadastrar
-                    </button>
-                    <button type="button" class="btn btn-secondary" onclick="closeModal('addRemetenteModal')">
-                        Cancelar
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
-
     <!-- View Email Modal -->
     <div id="viewEmailModal" class="modal">
         <div class="modal-content">
@@ -214,7 +199,6 @@
                         <pre><code id="enviarCode">curl -X POST ${window.location.origin}/send-email \
   -H "Content-Type: application/json" \
   -d '{
-    "remetente": "seu-email@gmail.com",
     "destinatario": "destino@exemplo.com",
     "subject": "Assunto do email",
     "message": "Conteúdo da mensagem"
@@ -226,14 +210,14 @@
                 </div>
 
                 <div class="docs-section">
-                    <h4><i class="fas fa-list"></i> Listar Remetentes</h4>
+                    <h4><i class="fab fa-google"></i> Usuário autenticado</h4>
                     <div class="endpoint-info">
                         <span class="method get">GET</span>
-                        <span class="endpoint">/remetentes</span>
+                        <span class="endpoint">/auth/me</span>
                     </div>
                     <div class="code-block">
-                        <pre><code id="listarRemetentesCode">curl ${window.location.origin}/remetentes</code></pre>
-                        <button class="btn btn-sm btn-secondary" onclick="copyToClipboard('listarRemetentesCode')">
+                        <pre><code id="authMeCode">curl ${window.location.origin}/auth/me</code></pre>
+                        <button class="btn btn-sm btn-secondary" onclick="copyToClipboard('authMeCode')">
                             <i class="fas fa-copy"></i>
                         </button>
                     </div>
@@ -256,18 +240,18 @@
                 <div class="docs-section">
                     <h4><i class="fas fa-book"></i> Manual de Uso</h4>
                     <div class="manual-content">
-                        <h5>1. Configuração do Gmail</h5>
+                        <h5>1. Configuração do Google</h5>
                         <ul>
-                            <li>Ative a verificação em duas etapas na sua conta Google</li>
-                            <li>Gere uma "Senha de App" em: <a href="https://myaccount.google.com/apppasswords" target="_blank">https://myaccount.google.com/apppasswords</a></li>
-                            <li>Use essa senha ao cadastrar o remetente</li>
+                            <li>Ative a Gmail API no Google Cloud</li>
+                            <li>Configure OAuth Client Web e redirect URI</li>
+                            <li>Entre com Google para autorizar o envio</li>
                         </ul>
 
                         <h5>2. Fluxo de Uso</h5>
                         <ol>
-                            <li>Cadastre um remetente com email e senha de app</li>
-                            <li>Use o remetente cadastrado para enviar emails</li>
-                            <li>Consulte o histórico para ver todos os envios</li>
+                            <li>Entre ou cadastre sua conta Google</li>
+                            <li>Envie emails pela conta logada</li>
+                            <li>Consulte apenas seu historico</li>
                         </ol>
 
                         <h5>3. Exemplo JavaScript</h5>
@@ -279,7 +263,6 @@ fetch('${window.location.origin}/send-email', {
     'Content-Type': 'application/json'
   },
   body: JSON.stringify({
-    remetente: 'seu-email@gmail.com',
     destinatario: 'destino@exemplo.com',
     subject: 'Teste via API',
     message: 'Este é um teste de envio via API'
@@ -311,48 +294,9 @@ fetch('${window.location.origin}/send-email', {
 
     <script src="script.js"></script>
     <script>
-        // Verificar autenticação ao carregar a página
         document.addEventListener('DOMContentLoaded', function() {
-            checkAuth();
             updateBaseUrl();
         });
-
-        function checkAuth() {
-            const isAuthenticated = localStorage.getItem('isAuthenticated');
-            const authTimestamp = localStorage.getItem('authTimestamp');
-            
-            if (!isAuthenticated || !authTimestamp) {
-                window.location.href = '/login';
-                return;
-            }
-            
-            // Verificar se o token ainda é válido (24 horas)
-            const now = Date.now();
-            const authTime = parseInt(authTimestamp);
-            const hoursDiff = (now - authTime) / (1000 * 60 * 60);
-            
-            if (hoursDiff >= 24) {
-                // Token expirado
-                localStorage.removeItem('isAuthenticated');
-                localStorage.removeItem('authUsername');
-                localStorage.removeItem('authTimestamp');
-                window.location.href = '/login';
-                return;
-            }
-            
-            // Atualizar display do usuário
-            const username = localStorage.getItem('authUsername');
-            if (username) {
-                document.getElementById('userDisplay').textContent = `Bem-vindo, ${username}!`;
-            }
-        }
-
-        function logout() {
-            localStorage.removeItem('isAuthenticated');
-            localStorage.removeItem('authUsername');
-            localStorage.removeItem('authTimestamp');
-            window.location.href = '/login';
-        }
 
         function updateBaseUrl() {
             const baseUrl = window.location.origin;

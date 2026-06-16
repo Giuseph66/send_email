@@ -1,8 +1,10 @@
 const express = require('express');
-const nodemailer = require('nodemailer');
 const dotenv = require('dotenv');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const crypto = require('crypto');
+const session = require('express-session');
+const { google } = require('googleapis');
 const puppeteer = require('puppeteer');
 const rateLimit = require('express-rate-limit');
 const NodeCache = require('node-cache');
@@ -13,6 +15,18 @@ const app = express();
 
 dotenv.config();
 app.use(express.json());
+app.use(session({
+  name: 'send_email.sid',
+  secret: process.env.SESSION_SECRET || 'troque-este-segredo-em-desenvolvimento',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 24 * 60 * 60 * 1000
+  }
+}));
 
 // Servir arquivos estáticos da pasta public
 app.use(express.static(path.join(__dirname, 'public')));
@@ -602,6 +616,95 @@ async function scrapeProduct(url, retries = 3) {
 const dbPath = path.join(__dirname, 'emails.db');
 const db = new sqlite3.Database(dbPath);
 
+const GOOGLE_SCOPES = [
+  'openid',
+  'email',
+  'profile',
+  'https://www.googleapis.com/auth/gmail.send'
+];
+
+function getOAuth2Client() {
+  return new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    process.env.GOOGLE_REDIRECT_URI
+  );
+}
+
+function getEncryptionKey() {
+  if (!process.env.TOKEN_ENCRYPTION_KEY) {
+    throw new Error('TOKEN_ENCRYPTION_KEY não configurada');
+  }
+  return crypto.createHash('sha256').update(process.env.TOKEN_ENCRYPTION_KEY).digest();
+}
+
+function encryptToken(token) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', getEncryptionKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(token, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `${iv.toString('base64')}:${tag.toString('base64')}:${encrypted.toString('base64')}`;
+}
+
+function decryptToken(value) {
+  const [iv, tag, encrypted] = value.split(':').map(part => Buffer.from(part, 'base64'));
+  const decipher = crypto.createDecipheriv('aes-256-gcm', getEncryptionKey(), iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
+}
+
+function dbGet(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => err ? reject(err) : resolve(row));
+  });
+}
+
+function dbAll(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => err ? reject(err) : resolve(rows));
+  });
+}
+
+function dbRun(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function(err) {
+      err ? reject(err) : resolve(this);
+    });
+  });
+}
+
+function requireAuth(req, res, next) {
+  if (!req.session.userId) {
+    return res.status(401).json({ error: 'Não autenticado' });
+  }
+  next();
+}
+
+function escapeHeader(value) {
+  return String(value || '').replace(/[\r\n]/g, ' ').trim();
+}
+
+function encodeSubject(subject) {
+  return `=?UTF-8?B?${Buffer.from(subject, 'utf8').toString('base64')}?=`;
+}
+
+function createMimeMessage({ from, to, subject, html }) {
+  const lines = [
+    `From: ${escapeHeader(from)}`,
+    `To: ${escapeHeader(to)}`,
+    `Subject: ${encodeSubject(escapeHeader(subject))}`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/html; charset=UTF-8',
+    '',
+    html
+  ];
+  return Buffer.from(lines.join('\r\n'), 'utf8')
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
 // ==================== ENDPOINTS DA API DE SCRAPING ====================
 
 // Endpoint principal para scraping de produtos
@@ -752,13 +855,38 @@ db.serialize(() => {
   // Tabela para emails enviados
   db.run(`CREATE TABLE IF NOT EXISTS emails_enviados (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    remetente TEXT NOT NULL,
+    remetente TEXT,
     destinatario TEXT NOT NULL,
     assunto TEXT NOT NULL,
     mensagem TEXT NOT NULL,
     data_envio DATETIME DEFAULT CURRENT_TIMESTAMP,
     status TEXT DEFAULT 'enviado'
   )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS google_users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    google_id TEXT UNIQUE NOT NULL,
+    email TEXT UNIQUE NOT NULL,
+    name TEXT,
+    picture TEXT,
+    refresh_token_encrypted TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  db.all(`PRAGMA table_info(emails_enviados)`, (err, columns = []) => {
+    if (err) {
+      console.error('Erro ao verificar emails_enviados:', err);
+      return;
+    }
+    const names = columns.map(column => column.name);
+    if (!names.includes('user_id')) {
+      db.run(`ALTER TABLE emails_enviados ADD COLUMN user_id INTEGER`);
+    }
+    if (!names.includes('gmail_message_id')) {
+      db.run(`ALTER TABLE emails_enviados ADD COLUMN gmail_message_id TEXT`);
+    }
+  });
 });
 
 // Rota principal - redireciona para login ou dashboard
@@ -776,178 +904,199 @@ app.get('/dashboard', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
 });
 
-// Rota para cadastrar um novo remetente
-app.post('/cadastrar-remetente', (req, res) => {
-  const { email, senha } = req.body;
+app.get('/auth/google', (req, res) => {
+  const oauth2Client = getOAuth2Client();
+  const mode = ['login', 'register', 'connect'].includes(req.query.mode) ? req.query.mode : 'login';
+  const url = oauth2Client.generateAuthUrl({
+    access_type: 'offline',
+    prompt: 'consent select_account',
+    include_granted_scopes: true,
+    state: mode,
+    scope: GOOGLE_SCOPES
+  });
+  res.redirect(url);
+});
 
-  if (!email || !senha) {
-    return res.status(400).json({ error: 'Campos obrigatórios: email, senha' });
+app.get('/auth/google/callback', async (req, res) => {
+  try {
+    const { code } = req.query;
+    if (!code) {
+      return res.redirect('/login?error=missing_code');
+    }
+
+    const oauth2Client = getOAuth2Client();
+    const { tokens } = await oauth2Client.getToken(code);
+    oauth2Client.setCredentials(tokens);
+
+    const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+    const { data: profile } = await oauth2.userinfo.get();
+
+    const existing = await dbGet(`SELECT id, refresh_token_encrypted FROM google_users WHERE google_id = ? OR email = ?`, [profile.id, profile.email]);
+    const refreshTokenEncrypted = tokens.refresh_token
+      ? encryptToken(tokens.refresh_token)
+      : existing?.refresh_token_encrypted;
+
+    if (!refreshTokenEncrypted) {
+      return res.redirect('/dashboard?error=missing_refresh_token');
+    }
+
+    if (existing) {
+      await dbRun(`
+        UPDATE google_users
+        SET google_id = ?, email = ?, name = ?, picture = ?, refresh_token_encrypted = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `, [profile.id, profile.email, profile.name, profile.picture, refreshTokenEncrypted, existing.id]);
+      req.session.userId = existing.id;
+    } else {
+      const result = await dbRun(`
+        INSERT INTO google_users (google_id, email, name, picture, refresh_token_encrypted)
+        VALUES (?, ?, ?, ?, ?)
+      `, [profile.id, profile.email, profile.name, profile.picture, refreshTokenEncrypted]);
+      req.session.userId = result.lastID;
+    }
+
+    res.redirect(process.env.APP_URL ? `${process.env.APP_URL}/dashboard` : '/dashboard');
+  } catch (error) {
+    console.error('Erro no callback Google:', error);
+    res.redirect('/login?error=google_auth_failed');
   }
-  const senha_sem_espaco = senha.replace(/\s/g, '');
-  // Validar formato do email
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(email)) {
-    return res.status(400).json({ error: 'Formato de email inválido' });
+});
+
+app.get('/auth/me', async (req, res) => {
+  if (!req.session.userId) {
+    return res.status(401).json({ error: 'Não autenticado' });
   }
 
-  db.run(`INSERT INTO remetentes (email, senha) VALUES (?, ?)`, 
-    [email, senha_sem_espaco], 
-    function(err) {
-      if (err) {
-        if (err.message.includes('UNIQUE constraint failed')) {
-          return res.status(400).json({ error: 'Email já cadastrado' });
-        }
-        console.error('Erro ao cadastrar remetente:', err);
-        return res.status(500).json({ error: 'Erro ao cadastrar remetente' });
-      }
-      res.status(201).json({ 
-        message: 'Remetente cadastrado com sucesso!',
-        id: this.lastID 
-      });
+  try {
+    const user = await dbGet(`
+      SELECT id, email, name, picture, refresh_token_encrypted
+      FROM google_users
+      WHERE id = ?
+    `, [req.session.userId]);
+
+    if (!user) {
+      req.session.destroy(() => {});
+      return res.status(401).json({ error: 'Não autenticado' });
     }
-  );
+
+    res.json({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      picture: user.picture,
+      googleConnected: Boolean(user.refresh_token_encrypted)
+    });
+  } catch (error) {
+    console.error('Erro em /auth/me:', error);
+    res.status(500).json({ error: 'Erro ao buscar usuário' });
+  }
 });
 
-// Rota para listar todos os remetentes
-app.get('/remetentes', (req, res) => {
-  db.all(`SELECT id, email, data_cadastro FROM remetentes ORDER BY data_cadastro DESC`, (err, rows) => {
+app.post('/auth/logout', (req, res) => {
+  req.session.destroy(err => {
     if (err) {
-      console.error('Erro ao buscar remetentes:', err);
-      return res.status(500).json({ error: 'Erro ao buscar remetentes' });
+      return res.status(500).json({ error: 'Erro ao sair' });
     }
-    res.json(rows);
+    res.clearCookie('send_email.sid');
+    res.json({ message: 'Logout realizado' });
   });
 });
 
-// Rota para buscar remetente por ID
-app.get('/remetentes/:id', (req, res) => {
-  const { id } = req.params;
-  db.get(`SELECT id, email, data_cadastro FROM remetentes WHERE id = ?`, [id], (err, row) => {
-    if (err) {
-      console.error('Erro ao buscar remetente:', err);
-      return res.status(500).json({ error: 'Erro ao buscar remetente' });
-    }
-    if (!row) {
-      return res.status(404).json({ error: 'Remetente não encontrado' });
-    }
-    res.json(row);
-  });
+app.delete('/auth/google/disconnect', requireAuth, async (req, res) => {
+  try {
+    await dbRun(`UPDATE google_users SET refresh_token_encrypted = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [req.session.userId]);
+    req.session.destroy(() => {});
+    res.clearCookie('send_email.sid');
+    res.json({ message: 'Conta Google desconectada' });
+  } catch (error) {
+    console.error('Erro ao desconectar Google:', error);
+    res.status(500).json({ error: 'Erro ao desconectar Google' });
+  }
 });
 
-// Rota para deletar remetente por ID
-app.delete('/remetentes/:id', (req, res) => {
-  const { id } = req.params;
-  db.run(`DELETE FROM remetentes WHERE id = ?`, [id], function(err) {
-    if (err) {
-      console.error('Erro ao deletar remetente:', err);
-      return res.status(500).json({ error: 'Erro ao deletar remetente' });
-    }
-    if (this.changes === 0) {
-      return res.status(404).json({ error: 'Remetente não encontrado' });
-    }
-    res.json({ message: 'Remetente deletado com sucesso' });
-  });
-});
+app.post('/send-email', requireAuth, async (req, res) => {
+  const { destinatario, subject, message } = req.body;
 
-app.post('/send-email', async (req, res) => {
-  const { remetente, destinatario, subject, message } = req.body;
-
-  if (!remetente || !destinatario || !subject || !message) {
-    return res.status(400).json({ 
-      error: 'Campos obrigatórios: remetente, destinatario, subject, message' 
+  if (!destinatario || !subject || !message) {
+    return res.status(400).json({
+      error: 'Campos obrigatórios: destinatario, subject, message'
     });
   }
 
-  // Buscar a senha do remetente no banco de dados
-  db.get(`SELECT senha FROM remetentes WHERE email = ?`, [remetente], async (err, row) => {
-    if (err) {
-      console.error('Erro ao buscar remetente:', err);
-      return res.status(500).json({ error: 'Erro interno do servidor' });
+  try {
+    const user = await dbGet(`SELECT id, email, refresh_token_encrypted FROM google_users WHERE id = ?`, [req.session.userId]);
+    if (!user || !user.refresh_token_encrypted) {
+      return res.status(400).json({ error: 'Conta Google não conectada' });
     }
 
-    if (!row) {
-      return res.status(404).json({ 
-        error: 'Remetente não cadastrado. Cadastre-se primeiro em /cadastrar-remetente' 
-      });
-    }
+    const oauth2Client = getOAuth2Client();
+    oauth2Client.setCredentials({ refresh_token: decryptToken(user.refresh_token_encrypted) });
 
-    // Criar transporter com as credenciais do remetente
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: remetente,
-        pass: row.senha,
-      },
-    });
-
-    const mailOptions = {
-      from: remetente,
+    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+    const raw = createMimeMessage({
+      from: user.email,
       to: destinatario,
       subject,
-      html: message,
-    };
+      html: message
+    });
 
-    try {
-      await transporter.sendMail(mailOptions);
-      
-      // Salvar o email enviado no banco de dados
-      const stmt = db.prepare(`INSERT INTO emails_enviados (remetente, destinatario, assunto, mensagem) VALUES (?, ?, ?, ?)`);
-      stmt.run(remetente, destinatario, subject, message, (err) => {
-        if (err) {
-          console.error('Erro ao salvar no banco de dados:', err);
-        } else {
-          console.log('Email salvo no banco de dados com sucesso');
-        }
-      });
-      stmt.finalize();
-      
-      res.status(200).json({ message: 'E-mail enviado com sucesso!' });
-    } catch (error) {
-      console.error('Erro ao enviar e-mail:', error);
-      res.status(500).json({ error: 'Falha ao enviar o e-mail. Verifique suas credenciais.' });
-    }
-  });
+    const result = await gmail.users.messages.send({
+      userId: 'me',
+      requestBody: { raw }
+    });
+
+    await dbRun(`
+      INSERT INTO emails_enviados (user_id, gmail_message_id, remetente, destinatario, assunto, mensagem)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `, [user.id, result.data.id, user.email, destinatario, subject, message]);
+
+    res.status(200).json({
+      message: 'E-mail enviado com sucesso!',
+      gmailMessageId: result.data.id
+    });
+  } catch (error) {
+    console.error('Erro ao enviar e-mail com Gmail API:', error);
+    res.status(500).json({ error: 'Falha ao enviar o e-mail pela Gmail API.' });
+  }
 });
 
 // Rota para listar todos os emails enviados
-app.get('/emails', (req, res) => {
-  db.all(`SELECT * FROM emails_enviados ORDER BY data_envio DESC`, (err, rows) => {
-    if (err) {
-      console.error('Erro ao buscar emails:', err);
-      return res.status(500).json({ error: 'Erro ao buscar emails' });
-    }
+app.get('/emails', requireAuth, async (req, res) => {
+  try {
+    const rows = await dbAll(`SELECT * FROM emails_enviados WHERE user_id = ? ORDER BY data_envio DESC`, [req.session.userId]);
     res.json(rows);
-  });
+  } catch (error) {
+    console.error('Erro ao buscar emails:', error);
+    res.status(500).json({ error: 'Erro ao buscar emails' });
+  }
 });
 
 // Rota para buscar email por ID
-app.get('/emails/:id', (req, res) => {
-  const { id } = req.params;
-  db.get(`SELECT * FROM emails_enviados WHERE id = ?`, [id], (err, row) => {
-    if (err) {
-      console.error('Erro ao buscar email:', err);
-      return res.status(500).json({ error: 'Erro ao buscar email' });
-    }
+app.get('/emails/:id', requireAuth, async (req, res) => {
+  try {
+    const row = await dbGet(`SELECT * FROM emails_enviados WHERE id = ? AND user_id = ?`, [req.params.id, req.session.userId]);
     if (!row) {
       return res.status(404).json({ error: 'Email não encontrado' });
     }
     res.json(row);
-  });
+  } catch (error) {
+    console.error('Erro ao buscar email:', error);
+    res.status(500).json({ error: 'Erro ao buscar email' });
+  }
 });
 
 // Rota para deletar email por ID
-app.delete('/emails/:id', (req, res) => {
-  const { id } = req.params;
-  db.run(`DELETE FROM emails_enviados WHERE id = ?`, [id], function(err) {
-    if (err) {
-      console.error('Erro ao deletar email:', err);
-      return res.status(500).json({ error: 'Erro ao deletar email' });
-    }
-    if (this.changes === 0) {
+app.delete('/emails/:id', requireAuth, async (req, res) => {
+  try {
+    const result = await dbRun(`DELETE FROM emails_enviados WHERE id = ? AND user_id = ?`, [req.params.id, req.session.userId]);
+    if (result.changes === 0) {
       return res.status(404).json({ error: 'Email não encontrado' });
     }
     res.json({ message: 'Email deletado com sucesso' });
-  });
+  } catch (error) {
+    console.error('Erro ao deletar email:', error);
+    res.status(500).json({ error: 'Erro ao deletar email' });
+  }
 });
 
 const PORT = process.env.PORT || 3550;

@@ -1,7 +1,7 @@
 {
-  "name": "scraping-api",
+  "name": "send_email",
   "version": "1.0.0",
-  "description": "API externa para scraping de produtos com contorno de bloqueios",
+  "description": "Envio de emails com Google OAuth2, Gmail API, SQLite e API de scraping",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -9,21 +9,28 @@
     "test": "node test-api.js"
   },
   "dependencies": {
+    "axios": "^1.6.0",
+    "cheerio": "^1.0.0-rc.12",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
-    "nodemailer": "^7.0.5",
-    "sqlite3": "^5.1.6",
-    "puppeteer": "^21.5.0",
-    "axios": "^1.6.0",
     "express-rate-limit": "^7.1.5",
+    "express-session": "^1.19.0",
+    "googleapis": "^173.0.0",
     "node-cache": "^5.1.2",
-    "user-agents": "^1.0.1374",
-    "cheerio": "^1.0.0-rc.12"
+    "puppeteer": "^21.5.0",
+    "sqlite3": "^5.1.6",
+    "user-agents": "^1.0.1374"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
   },
-  "keywords": ["scraping", "api", "mercado-livre", "bot-evasion"],
+  "keywords": [
+    "gmail",
+    "oauth2",
+    "email",
+    "sqlite",
+    "scraping"
+  ],
   "author": "Jesus",
   "license": "MIT"
 }
