@@ -174,9 +174,14 @@
         <div class="modal-content" style="max-width: 800px;">
             <div class="modal-header">
                 <h3><i class="fas fa-code"></i> API Documentation</h3>
-                <button class="modal-close" onclick="closeModal('infoModal')">
-                    <i class="fas fa-times"></i>
-                </button>
+                <div class="modal-header-actions">
+                    <button id="docsTokenToggle" class="modal-close" onclick="toggleDocsToken()" title="Mostrar/ocultar API token">
+                        <i class="fas fa-eye"></i>
+                    </button>
+                    <button class="modal-close" onclick="closeModal('infoModal')">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
             </div>
             <div class="api-docs">
                 <div class="docs-section">
@@ -197,6 +202,7 @@
                     </div>
                     <div class="code-block">
                         <pre><code id="enviarCode">curl -X POST ${window.location.origin}/send-email \
+  -H "Authorization: Bearer SEU_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "destinatario": "destino@exemplo.com",
@@ -210,13 +216,31 @@
                 </div>
 
                 <div class="docs-section">
+                    <h4><i class="fas fa-key"></i> API Token</h4>
+                    <div class="endpoint-info">
+                        <span class="method post">POST</span>
+                        <span class="endpoint">/auth/api-token</span>
+                    </div>
+                    <p style="color: var(--text-2); margin-bottom: 12px;">
+                        Gere o token em Minha Conta Google. Copie na hora: ele nao sera mostrado novamente.
+                    </p>
+                    <div class="code-block">
+                        <pre><code id="apiTokenUsageCode">Authorization: Bearer SEU_API_TOKEN</code></pre>
+                        <button class="btn btn-sm btn-secondary" onclick="copyToClipboard('apiTokenUsageCode')">
+                            <i class="fas fa-copy"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="docs-section">
                     <h4><i class="fab fa-google"></i> Usuário autenticado</h4>
                     <div class="endpoint-info">
                         <span class="method get">GET</span>
                         <span class="endpoint">/auth/me</span>
                     </div>
                     <div class="code-block">
-                        <pre><code id="authMeCode">curl ${window.location.origin}/auth/me</code></pre>
+                        <pre><code id="authMeCode">curl ${window.location.origin}/auth/me \
+  -H "Authorization: Bearer SEU_API_TOKEN"</code></pre>
                         <button class="btn btn-sm btn-secondary" onclick="copyToClipboard('authMeCode')">
                             <i class="fas fa-copy"></i>
                         </button>
@@ -230,7 +254,8 @@
                         <span class="endpoint">/emails</span>
                     </div>
                     <div class="code-block">
-                        <pre><code id="historicoCode">curl ${window.location.origin}/emails</code></pre>
+                        <pre><code id="historicoCode">curl ${window.location.origin}/emails \
+  -H "Authorization: Bearer SEU_API_TOKEN"</code></pre>
                         <button class="btn btn-sm btn-secondary" onclick="copyToClipboard('historicoCode')">
                             <i class="fas fa-copy"></i>
                         </button>
@@ -250,6 +275,7 @@
                         <h5>2. Fluxo de Uso</h5>
                         <ol>
                             <li>Entre ou cadastre sua conta Google</li>
+                            <li>Gere um API token em Minha Conta Google</li>
                             <li>Envie emails pela conta logada</li>
                             <li>Consulte apenas seu historico</li>
                         </ol>
@@ -260,6 +286,7 @@
 fetch('${window.location.origin}/send-email', {
   method: 'POST',
   headers: {
+    'Authorization': 'Bearer SEU_API_TOKEN',
     'Content-Type': 'application/json'
   },
   body: JSON.stringify({
@@ -309,6 +336,9 @@ fetch('${window.location.origin}/send-email', {
                     block.textContent = block.textContent.replace(/\${window\.location\.origin}/g, baseUrl);
                 }
             });
+            if (typeof updateDocsTokenExamples === 'function') {
+                updateDocsTokenExamples();
+            }
         }
 
         function copyToClipboard(elementId) {

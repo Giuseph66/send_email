@@ -803,6 +803,12 @@ body {
 }
 .modal-close:hover { background: var(--surface-2); color: var(--text-1); }
 
+.modal-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .modal-form { padding: 20px; }
 .modal-actions { display: flex; gap: 8px; margin-top: 18px; }
 

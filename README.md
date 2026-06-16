@@ -72,22 +72,41 @@ Fluxo:
 
 ## Rotas principais
 
+As rotas autenticadas usam sessao do Express via cookie `send_email.sid`.
+Para integracoes externas, use API token por usuario via header `Authorization: Bearer`.
+
+Se voce rodar:
+
+```bash
+curl http://localhost:3550/auth/me
+```
+
+sem cookie de sessao, a resposta esperada e:
+
+```json
+{"error":"Não autenticado"}
+```
+
+Para testar rotas protegidas via terminal, faca login no navegador e gere um API token em `Minha Conta Google`.
+
 ### Autenticacao
 
 - `GET /auth/google`
 - `GET /auth/google/callback`
-- `GET /auth/me`
-- `POST /auth/logout`
-- `DELETE /auth/google/disconnect`
+- `GET /auth/me` - requer cookie de sessao ou Bearer token
+- `POST /auth/logout` - requer cookie de sessao
+- `DELETE /auth/google/disconnect` - requer cookie de sessao
+- `POST /auth/api-token` - gera novo API token; requer cookie de sessao
+- `DELETE /auth/api-token` - revoga API token; requer cookie de sessao ou Bearer token
 
 ### Emails
 
-- `POST /send-email`
-- `GET /emails`
-- `GET /emails/:id`
-- `DELETE /emails/:id`
+- `POST /send-email` - requer cookie de sessao ou Bearer token
+- `GET /emails` - requer cookie de sessao ou Bearer token
+- `GET /emails/:id` - requer cookie de sessao ou Bearer token
+- `DELETE /emails/:id` - requer cookie de sessao ou Bearer token
 
-`/send-email` exige sessao e recebe:
+`/send-email` exige autenticacao e recebe:
 
 ```json
 {
@@ -98,6 +117,28 @@ Fluxo:
 ```
 
 Nao envie `remetente`; o backend usa a conta Google da sessao atual.
+
+Exemplo com API token:
+
+```bash
+curl http://localhost:3550/auth/me \
+  -H 'Authorization: Bearer SEU_API_TOKEN'
+```
+
+Envio por outra plataforma:
+
+```bash
+curl -X POST http://localhost:3550/send-email \
+  -H 'Authorization: Bearer SEU_API_TOKEN' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "destinatario": "destino@exemplo.com",
+    "subject": "Teste API",
+    "message": "<p>Email enviado por API externa</p>"
+  }'
+```
+
+O API token pertence ao usuario Google logado. Ele acessa apenas perfil, envio e historico desse usuario.
 
 ### Scraping
 

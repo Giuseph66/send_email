@@ -673,11 +673,39 @@ function dbRun(sql, params = []) {
   });
 }
 
-function requireAuth(req, res, next) {
-  if (!req.session.userId) {
+function hashApiToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+function generateApiToken() {
+  return `se_${crypto.randomBytes(32).toString('base64url')}`;
+}
+
+async function requireAuth(req, res, next) {
+  try {
+    if (req.session.userId) {
+      req.userId = req.session.userId;
+      return next();
+    }
+
+    const authHeader = req.get('authorization') || '';
+    const match = authHeader.match(/^Bearer\s+(.+)$/i);
+    if (match) {
+      const row = await dbGet(
+        `SELECT id FROM google_users WHERE api_token_hash = ? AND refresh_token_encrypted IS NOT NULL`,
+        [hashApiToken(match[1])]
+      );
+      if (row) {
+        req.userId = row.id;
+        return next();
+      }
+    }
+
     return res.status(401).json({ error: 'Não autenticado' });
+  } catch (error) {
+    console.error('Erro ao autenticar:', error);
+    return res.status(500).json({ error: 'Erro ao autenticar' });
   }
-  next();
 }
 
 function escapeHeader(value) {
@@ -887,6 +915,17 @@ db.serialize(() => {
       db.run(`ALTER TABLE emails_enviados ADD COLUMN gmail_message_id TEXT`);
     }
   });
+
+  db.all(`PRAGMA table_info(google_users)`, (err, columns = []) => {
+    if (err) {
+      console.error('Erro ao verificar google_users:', err);
+      return;
+    }
+    const names = columns.map(column => column.name);
+    if (!names.includes('api_token_hash')) {
+      db.run(`ALTER TABLE google_users ADD COLUMN api_token_hash TEXT`);
+    }
+  });
 });
 
 // Rota principal - redireciona para login ou dashboard
@@ -962,17 +1001,13 @@ app.get('/auth/google/callback', async (req, res) => {
   }
 });
 
-app.get('/auth/me', async (req, res) => {
-  if (!req.session.userId) {
-    return res.status(401).json({ error: 'Não autenticado' });
-  }
-
+app.get('/auth/me', requireAuth, async (req, res) => {
   try {
     const user = await dbGet(`
-      SELECT id, email, name, picture, refresh_token_encrypted
+      SELECT id, email, name, picture, refresh_token_encrypted, api_token_hash
       FROM google_users
       WHERE id = ?
-    `, [req.session.userId]);
+    `, [req.userId]);
 
     if (!user) {
       req.session.destroy(() => {});
@@ -984,7 +1019,8 @@ app.get('/auth/me', async (req, res) => {
       email: user.email,
       name: user.name,
       picture: user.picture,
-      googleConnected: Boolean(user.refresh_token_encrypted)
+      googleConnected: Boolean(user.refresh_token_encrypted),
+      apiTokenConfigured: Boolean(user.api_token_hash)
     });
   } catch (error) {
     console.error('Erro em /auth/me:', error);
@@ -1004,13 +1040,37 @@ app.post('/auth/logout', (req, res) => {
 
 app.delete('/auth/google/disconnect', requireAuth, async (req, res) => {
   try {
-    await dbRun(`UPDATE google_users SET refresh_token_encrypted = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [req.session.userId]);
+    await dbRun(`UPDATE google_users SET refresh_token_encrypted = NULL, api_token_hash = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [req.userId]);
     req.session.destroy(() => {});
     res.clearCookie('send_email.sid');
     res.json({ message: 'Conta Google desconectada' });
   } catch (error) {
     console.error('Erro ao desconectar Google:', error);
     res.status(500).json({ error: 'Erro ao desconectar Google' });
+  }
+});
+
+app.post('/auth/api-token', requireAuth, async (req, res) => {
+  try {
+    const token = generateApiToken();
+    await dbRun(
+      `UPDATE google_users SET api_token_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [hashApiToken(token), req.userId]
+    );
+    res.json({ token });
+  } catch (error) {
+    console.error('Erro ao gerar API token:', error);
+    res.status(500).json({ error: 'Erro ao gerar API token' });
+  }
+});
+
+app.delete('/auth/api-token', requireAuth, async (req, res) => {
+  try {
+    await dbRun(`UPDATE google_users SET api_token_hash = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [req.userId]);
+    res.json({ message: 'API token revogado' });
+  } catch (error) {
+    console.error('Erro ao revogar API token:', error);
+    res.status(500).json({ error: 'Erro ao revogar API token' });
   }
 });
 
@@ -1024,7 +1084,7 @@ app.post('/send-email', requireAuth, async (req, res) => {
   }
 
   try {
-    const user = await dbGet(`SELECT id, email, refresh_token_encrypted FROM google_users WHERE id = ?`, [req.session.userId]);
+    const user = await dbGet(`SELECT id, email, refresh_token_encrypted FROM google_users WHERE id = ?`, [req.userId]);
     if (!user || !user.refresh_token_encrypted) {
       return res.status(400).json({ error: 'Conta Google não conectada' });
     }
@@ -1063,7 +1123,7 @@ app.post('/send-email', requireAuth, async (req, res) => {
 // Rota para listar todos os emails enviados
 app.get('/emails', requireAuth, async (req, res) => {
   try {
-    const rows = await dbAll(`SELECT * FROM emails_enviados WHERE user_id = ? ORDER BY data_envio DESC`, [req.session.userId]);
+    const rows = await dbAll(`SELECT * FROM emails_enviados WHERE user_id = ? ORDER BY data_envio DESC`, [req.userId]);
     res.json(rows);
   } catch (error) {
     console.error('Erro ao buscar emails:', error);
@@ -1074,7 +1134,7 @@ app.get('/emails', requireAuth, async (req, res) => {
 // Rota para buscar email por ID
 app.get('/emails/:id', requireAuth, async (req, res) => {
   try {
-    const row = await dbGet(`SELECT * FROM emails_enviados WHERE id = ? AND user_id = ?`, [req.params.id, req.session.userId]);
+    const row = await dbGet(`SELECT * FROM emails_enviados WHERE id = ? AND user_id = ?`, [req.params.id, req.userId]);
     if (!row) {
       return res.status(404).json({ error: 'Email não encontrado' });
     }
@@ -1088,7 +1148,7 @@ app.get('/emails/:id', requireAuth, async (req, res) => {
 // Rota para deletar email por ID
 app.delete('/emails/:id', requireAuth, async (req, res) => {
   try {
-    const result = await dbRun(`DELETE FROM emails_enviados WHERE id = ? AND user_id = ?`, [req.params.id, req.session.userId]);
+    const result = await dbRun(`DELETE FROM emails_enviados WHERE id = ? AND user_id = ?`, [req.params.id, req.userId]);
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Email não encontrado' });
     }

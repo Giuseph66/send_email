@@ -7,6 +7,8 @@ const toastContainer = document.getElementById('toastContainer');
 let usuarioAtual = null;
 let historicoEmails = [];
 let pendingEmailData = null;
+let docsTokenVisible = false;
+let currentApiToken = localStorage.getItem('sendEmailApiToken') || '';
 
 document.addEventListener('DOMContentLoaded', function() {
     initializeApp();
@@ -107,10 +109,16 @@ function renderizarContaGoogle() {
                 </div>
                 <div class="card-info">
                     <h3>${usuarioAtual.email}</h3>
-                    <p>Conta logada com permissao Gmail</p>
+                    <p>Conta logada com permissao Gmail. API token: ${usuarioAtual.apiTokenConfigured ? 'configurado' : 'nao gerado'}</p>
                 </div>
             </div>
             <div class="card-actions">
+                <button class="btn btn-secondary" onclick="gerarApiToken()">
+                    <i class="fas fa-key"></i> Gerar API Token
+                </button>
+                <button class="btn btn-secondary" onclick="revogarApiToken()">
+                    <i class="fas fa-ban"></i> Revogar Token
+                </button>
                 <button class="btn btn-danger" onclick="desconectarGoogle()">
                     <i class="fas fa-unlink"></i> Desconectar Google
                 </button>
@@ -121,6 +129,73 @@ function renderizarContaGoogle() {
 
 function conectarGoogle() {
     window.location.href = '/auth/google?mode=login';
+}
+
+async function gerarApiToken() {
+    if (!confirm('Gerar novo API token? O token anterior para de funcionar.')) {
+        return;
+    }
+
+    try {
+        showLoading();
+        const data = await apiRequest('/auth/api-token', { method: 'POST' });
+        currentApiToken = data.token;
+        localStorage.setItem('sendEmailApiToken', data.token);
+        usuarioAtual = await apiRequest('/auth/me');
+        renderizarContaGoogle();
+        updateDocsTokenExamples();
+        prompt('Copie o API token agora. Ele nao sera mostrado novamente:', data.token);
+    } catch (error) {
+        showToast('Erro ao gerar API token: ' + error.message, 'error');
+    } finally {
+        hideLoading();
+    }
+}
+
+async function revogarApiToken() {
+    if (!confirm('Revogar API token atual? Integrações externas vao parar.')) {
+        return;
+    }
+
+    try {
+        showLoading();
+        await apiRequest('/auth/api-token', { method: 'DELETE' });
+        currentApiToken = '';
+        localStorage.removeItem('sendEmailApiToken');
+        usuarioAtual = await apiRequest('/auth/me');
+        renderizarContaGoogle();
+        updateDocsTokenExamples();
+        showToast('API token revogado', 'success');
+    } catch (error) {
+        showToast('Erro ao revogar API token: ' + error.message, 'error');
+    } finally {
+        hideLoading();
+    }
+}
+
+function updateDocsTokenExamples() {
+    const tokenValue = docsTokenVisible && currentApiToken ? currentApiToken : 'SEU_API_TOKEN';
+    document.querySelectorAll('code').forEach(block => {
+        block.textContent = block.textContent
+            .replace(/Bearer\s+(se_[A-Za-z0-9_-]+|SEU_API_TOKEN)/g, `Bearer ${tokenValue}`);
+    });
+
+    const icon = document.querySelector('#docsTokenToggle i');
+    if (icon) {
+        icon.className = docsTokenVisible ? 'fas fa-eye-slash' : 'fas fa-eye';
+    }
+}
+
+function toggleDocsToken() {
+    if (!currentApiToken) {
+        docsTokenVisible = false;
+        updateDocsTokenExamples();
+        showToast('Gere um API token em Minha Conta Google primeiro.', 'info');
+        return;
+    }
+
+    docsTokenVisible = !docsTokenVisible;
+    updateDocsTokenExamples();
 }
 
 async function desconectarGoogle() {
@@ -368,6 +443,10 @@ window.carregarHistorico = carregarHistorico;
 window.verDetalhesEmail = verDetalhesEmail;
 window.deletarEmail = deletarEmail;
 window.conectarGoogle = conectarGoogle;
+window.gerarApiToken = gerarApiToken;
+window.revogarApiToken = revogarApiToken;
+window.updateDocsTokenExamples = updateDocsTokenExamples;
+window.toggleDocsToken = toggleDocsToken;
 window.desconectarGoogle = desconectarGoogle;
 window.confirmarEnvio = confirmarEnvio;
 window.cancelarEnvio = cancelarEnvio;
